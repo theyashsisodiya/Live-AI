@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
+    <link rel="stylesheet" href="https://code.getmdl.io/1.3.0/material.indigo-pink.min.css">
+    <script defer src="https://code.getmdl.io/1.3.0/material.min.js"></script>
+
+    <style>
+        #videoElement {
+            width: 320px;
+            height: 240px;
+            border-radius: 20px;
+        }
+
+        #canvasElement {
+            display: none;
+        }
+
+        .demo-content {
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .button-group {
+            margin-bottom: 20px;
+        }
+
+        #chatLog {
+            width: 80%;
+            max-width: 600px;
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="mdl-layout mdl-js-layout mdl-layout--fixed-header">
+        <header class="mdl-layout__header">
+            <div class="mdl-layout__header-row">
+                <span class="mdl-layout-title">Gemini Live Demo</span>
+            </div>
+        </header>
+        <main class="mdl-layout__content">
+            <div class="page-content">
+                <div class="demo-content">
+                    <div class="button-group">
+                        <button id="startButton"
+                            class="mdl-button mdl-js-button mdl-button--fab mdl-button--mini-fab mdl-button--colored">
+                            <i class="material-icons">mic</i>
+                        </button>
+                        <button id="stopButton"
+                            class="mdl-button mdl-js-button mdl-button--fab mdl-button--mini-fab">
+                            <i class="material-icons">mic_off</i>
+                        </button>
+                    </div>
+                    <video id="videoElement" autoplay></video>
+                    <canvas id="canvasElement"></canvas>
+                    <div id="chatLog"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // Response class definition
+        class Response {
+            constructor(messageData) {
+                this.text = messageData.text || null;
+                this.audioData = messageData.audio_data || null;
+            }
+        }
+
+        const URL = "ws://localhost:9080";
+        const video = document.getElementById("videoElement");
+        const canvas = document.getElementById("canvasElement");
+        const context = canvas.getContext("2d");
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const chatLog = document.getElementById('chatLog');
+        
+        let stream = null;
+        let currentFrameB64;
+        let webSocket = null;
+        let interval = null;
+        let isSpeechSynthesisSupported = 'speechSynthesis' in window;
+
+        // Function to handle displaying messages
+        function displayMessage(message) {
+            const messageElement = document.createElement('p');
+            messageElement.textContent = message;
+            chatLog.appendChild(messageElement);
+            chatLog.scrollTop = chatLog.scrollHeight;
+        }
+
+        // Speech synthesis with error handling
+        function speakResponse(text) {
+            if (!isSpeechSynthesisSupported) {
+                console.warn('Speech synthesis is not supported in this browser');
+                return;
+            }
+
+            try {
+                // Cancel any ongoing speech
+                speechSynthesis.cancel();
+
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = "en-US";
+
+                utterance.onerror = (event) => {
+                    console.error('Speech synthesis error:', event);
+                };
+
+                speechSynthesis.speak(utterance);
+            } catch (error) {
+                console.error('Speech synthesis failed:', error);
+            }
+        }
+
+        async function startWebcam() {
+            try {
+                const constraints = {
+                    video: {
+                        width: { max: 640 },
+                        height: { max: 480 },
+                    },
+                };
+
+                stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = stream;
+            } catch (err) {
+                console.error("Error accessing the webcam: ", err);
+                displayMessage("Error: Could not access webcam");
+            }
+        }
+
+        function captureImage() {
+            if (stream) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const imageData = canvas.toDataURL("image/jpeg").split(",")[1].trim();
+                currentFrameB64 = imageData;
+            }
+        }
+
+        function connect() {
+            console.log("connecting: ", URL);
+
+            webSocket = new WebSocket(URL);
+
+            webSocket.onclose = (event) => {
+                console.log("websocket closed: ", event);
+                displayMessage("Connection closed");
+                // Clean up speech synthesis
+                if (isSpeechSynthesisSupported) {
+                    speechSynthesis.cancel();
+                }
+            };
+
+            webSocket.onerror = (event) => {
+                console.log("websocket error: ", event);
+                displayMessage("Connection error occurred");
+            };
+
+            webSocket.onopen = (event) => {
+                console.log("websocket open: ", event);
+                sendInitialSetupMessage();
+                displayMessage("Connected to server");
+            };
+
+            webSocket.onmessage = receiveMessage;
+        }
+
+        function sendInitialSetupMessage() {
+            console.log("sending setup message");
+            const setup_client_message = {
+                setup: {
+                    generation_config: { response_modalities: ["TEXT"] },
+                },
+            };
+
+            webSocket.send(JSON.stringify(setup_client_message));
+        }
+
+        function sendVoiceMessage(b64PCM) {
+            if (webSocket == null || webSocket.readyState !== WebSocket.OPEN) {
+                console.log("websocket not ready");
+                return;
+            }
+
+            const payload = {
+                realtime_input: {
+                    media_chunks: [{
+                        mime_type: "audio/pcm",
+                        data: b64PCM,
+                    },
+                    {
+                        mime_type: "image/jpeg",
+                        data: currentFrameB64,
+                    }],
+                },
+            };
+
+            webSocket.send(JSON.stringify(payload));
+        }
+
+        function receiveMessage(event) {
+            try {
+                const messageData = JSON.parse(event.data);
+                const response = new Response(messageData);
+
+                if (response.text) {
+                    displayMessage("GEMINI: " + response.text);
+                    speakResponse(response.text);
+                }
+            } catch (error) {
+                console.error('Error processing message:', error);
+                displayMessage("Error: Failed to process response");
+            }
+        }
+
+        // Initialize the application
+        window.addEventListener("load", async () => {
+            await startWebcam();
+            interval = setInterval(captureImage, 3000);
+            connect();
+        });
+
+        // Cleanup on page unload
+        window.addEventListener("unload", () => {
+            if (interval) {
+                clearInterval(interval);
+            }
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            if (webSocket) {
+                webSocket.close();
+            }
+            if (isSpeechSynthesisSupported) {
+                speechSynthesis.cancel();
+            }
+        });
+    </script>
+</body>
+</html>
