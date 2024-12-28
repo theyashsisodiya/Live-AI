@@ -43,9 +43,7 @@ cd <repository-folder>
 ```bash
 python -m venv venv
 # Activate on Windows
-venv\Scripts\activate
-# Activate on Linux/Mac
-source venv/bin/activate
+.\venv\Scripts\activate
 ```
 
 ### 3. Install Required Dependencies
