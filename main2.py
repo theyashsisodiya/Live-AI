@@ -2,13 +2,12 @@
 import asyncio
 import json
 import os
-import pyttsx3
 import websockets
 from google import genai
 import base64
 
 # Load API key from environment
-os.environ['GOOGLE_API_KEY'] = 'API_KEY'  # use your API key
+os.environ['GOOGLE_API_KEY'] = ''
 MODEL = "gemini-2.0-flash-exp"  # use your model ID
 
 client = genai.Client(
@@ -16,16 +15,6 @@ client = genai.Client(
     'api_version': 'v1alpha',
   }
 )
-tts_engine = pyttsx3.init()
-
-spoken_responce = completion.result.replace('Gemini')
-
-print(spoken_responce)
-
-
-tts_engine.say(spoken_responce)
-
-tts_engine.runAndWait()
 
 async def gemini_session_handler(client_websocket: websockets.WebSocketServerProtocol):
     """Handles the interaction with Gemini API within a websocket session.
